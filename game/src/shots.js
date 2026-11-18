@@ -1,79 +1,98 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// The screenshot scenes behind ?shot=chase|drive|street|mission. Each one
+// starts a fresh game, scripts a short slice of real play (steal, drive,
+// walk, deliver) with the real input and rules, then returns a camera that
+// frames the action. The same seed always gives the same frame.
+const STEP = 1 / 60;
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
-
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
+function pressKey(code) {
+  window.dispatchEvent(new KeyboardEvent('keydown', { code }));
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
-  }
-  return best;
+function stepN(game, input, n) {
+  for (let i = 0; i < n; i++) game.step(STEP, input);
 }
 
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+function enterNearestCar(game, input) {
+  pressKey('KeyE');
+  stepN(game, input, 2);
+}
+
+export function stageShot(game, input, shot, seed) {
+  game.startGame(false);
+  const s = game.state;
+  const d = game.danny;
+
+  if (shot === 'chase') {
+    // Mission 4, wanted 3, red Veloce GT tearing down Main Ave.
+    game.startMission(3);
+    s.missionTimer = 143; // 2:23 left
+    game.teleport(-120, -24);
+    d.heading = 0; // south, down Main Ave
+    const car = game.giveCar('coupe');
+    car.x = -117; car.z = -24; car.heading = 0;
+    enterNearestCar(game, input);
+    // Two patrol cars right behind, already on the chase.
+    const cops = game.cars.filter((c) => c.police);
+    cops.forEach((c, i) => {
+      c.x = -120; c.z = -24 - (10 + i * 12);
+      c.heading = 0; c.speed = 28;
+      c.route = game.city.findPath(game.city.nearestNode(c.x, c.z), game.city.nearestNode(d.x, d.z));
+      c.routeIndex = 0; c.repathTimer = 2;
+    });
+    input.held.up = true;
+    stepN(game, input, 150); // ~2.5 s of driving — cops still close behind
+    input.held.up = false;
+    const cx = d.x, cz = d.z;
+    // Front three-quarter from the road, car large in frame.
+    return { pos: [cx - 11, 5, cz + 12], look: [cx, 1.2, cz - 3] };
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
+
+  if (shot === 'drive') {
+    // Mission 1: the Meridian S on Sunset Ave, three-quarter rear view.
+    s.missionTimer = 131; // 2:11 left
+    game.teleport(-72, 60);
+    d.heading = Math.PI; // north
+    const car = game.giveCar('sedan');
+    car.x = -72; car.z = 60; car.heading = Math.PI;
+    enterNearestCar(game, input);
+    input.held.up = true;
+    stepN(game, input, 180); // ~3 s of driving
+    input.held.up = false;
+    const cx = d.x, cz = d.z;
+    // Three-quarter rear, whole car in frame with the street ahead.
+    return { pos: [cx + 4, 4, cz + 10], look: [cx, 1.2, cz - 3] };
   }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+
+  if (shot === 'street') {
+    // On foot on Sunset Ave, looking north down the street: Danny from
+    // behind, a yellow taxi ahead on the road, buildings on both sides.
+    // Camera stays on the road behind him, so the view runs down the
+    // street instead of into a building face.
+    game.teleport(-72, 150);
+    d.heading = Math.PI; // facing north, up the avenue
+    const taxi = game.giveCar('taxi');
+    taxi.x = -72; taxi.z = 130; taxi.heading = Math.PI;
+    stepN(game, input, 30);
+    return { pos: [-72, 3.5, 162], look: [-72, 1.5, 128] };
+  }
+
+  if (shot === 'mission') {
+    // Mission 1 done: the sedan at the garage, JOB DONE toast, $750 in hand.
+    game.setCash(750);
+    s.jobsDone = 1;
+    game.startMission(1); // THE PACKAGE
+    s.missionTimer = 198; // 3:18 left
+    s.toast = 'JOB DONE +$500';
+    s.toastUntil = s.time + 10;
+    game.teleport(114, 164);
+    d.heading = Math.PI / 2;
+    const car = game.giveCar('sedan');
+    car.x = 122; car.z = 158; car.heading = Math.PI / 2;
+    stepN(game, input, 10);
+    // Danny beside the sedan (not blocking it), garage behind.
+    return { pos: [110, 3.2, 171], look: [124, 1.2, 157] };
+  }
+
+  // Fallback: title-style orbit frame.
+  return null;
 }

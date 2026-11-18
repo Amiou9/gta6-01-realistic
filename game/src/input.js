@@ -1,53 +1,78 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard + mouse input. `held` is the live key state; `pressed` fires once
+// per keydown (edge-triggered) so a pistol tap is one shot, never a held burst.
+// Actions are consumed by the game each step via take().
+const KEYMAP = {
+  up: ['KeyW', 'ArrowUp'],
+  down: ['KeyS', 'ArrowDown'],
+  left: ['KeyA', 'ArrowLeft'],
+  right: ['KeyD', 'ArrowRight'],
+  enter: ['KeyE'],
+  punch: ['KeyF'],
+  reload: ['KeyR'],
+  handbrake: ['Space'],
+  sprint: ['ShiftLeft', 'ShiftRight'],
+  camera: ['KeyC'],
+  pause: ['KeyP', 'Escape'],
+  mute: ['KeyM'],
+  confirm: ['Enter', 'Space'],
+};
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+export const ACTION_SHOOT = 'shoot';
+export const ACTION_CONFIRM = 'confirm';
+export const ACTION_PAUSE = 'pause';
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+export function createInput(canvas) {
+  const held = { up: false, down: false, left: false, right: false, enter: false, punch: false, reload: false, handbrake: false, sprint: false, camera: false, pause: false, mute: false, confirm: false };
+  const pressed = new Set();
+  const byCode = {};
+  for (const [name, codes] of Object.entries(KEYMAP)) {
+    for (const code of codes) byCode[code] = name;
+  }
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
+  function onKeyDown(e) {
+    const name = byCode[e.code];
+    if (!name) return;
+    if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+    if (!e.repeat) pressed.add(name);
+    held[name] = true;
+  }
+  function onKeyUp(e) {
+    const name = byCode[e.code];
+    if (name) held[name] = false;
+  }
+  function onMouseDown(e) {
+    if (e.button === 0) pressed.add(ACTION_SHOOT);
+  }
+  function onBlur() {
+    for (const k of Object.keys(held)) held[k] = false;
+  }
 
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', onBlur);
+  canvas.addEventListener('mousedown', onMouseDown);
 
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
+    held,
+    // True once for each press since the last call; also clears the set.
+    take(action) {
+      if (pressed.has(action)) {
+        pressed.delete(action);
+        return true;
+      }
+      return false;
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
+    has(action) {
+      return pressed.has(action);
+    },
+    clear() {
+      pressed.clear();
+    },
+    dispose() {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+      canvas.removeEventListener('mousedown', onMouseDown);
     },
   };
 }
